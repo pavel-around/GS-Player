@@ -147,22 +147,28 @@ const initXr = (global: Global) => {
                 }
             });
 
-            // DOM touch — change reticle color to red on tap
-            const reticleMat = reticle.render!.meshInstances[0].material as StandardMaterial;
-            let tapped = false;
+            // DOM touch — place gsplat at reticle position
             const onTouch = (e: TouchEvent) => {
                 e.stopPropagation();
                 if ((e.target as HTMLElement).tagName === 'BUTTON') return;
-                tapped = !tapped;
-                if (tapped) {
-                    reticleMat.diffuse = new Color(1, 0, 0);
-                    reticleMat.emissive = new Color(1, 0, 0);
-                } else {
-                    reticleMat.diffuse = new Color(1, 1, 1);
-                    reticleMat.emissive = new Color(0.5, 0.5, 0.5);
+                if (reticleHitCount < 1 || !reticle || !reticle.enabled) {
+                    dbg(`[AR] TAP ignored — no reticle yet (hits=${reticleHitCount})`);
+                    return;
                 }
-                reticleMat.update();
-                dbg(`[AR] TAP → reticle color ${tapped ? 'RED' : 'WHITE'}`);
+
+                if (!gsplatEntity) gsplatEntity = app.root.findByName('gsplat') as Entity | null;
+                if (!gsplatEntity) {
+                    dbg('[AR] TAP — gsplat entity not found');
+                    return;
+                }
+
+                const rp = reticle.getPosition();
+                gsplatEntity.setPosition(rp.x, rp.y, rp.z);
+                gsplatEntity.setLocalScale(0.15, 0.15, 0.15);
+                gsplatEntity.setLocalEulerAngles(0, 0, 0);
+                gsplatEntity.enabled = true;
+                arPlaced = true;
+                dbg(`[AR] PLACED splat at ${rp.x.toFixed(2)},${rp.y.toFixed(2)},${rp.z.toFixed(2)}`);
             };
             overlayEl.style.pointerEvents = 'auto';
             overlayEl.addEventListener('touchstart', onTouch);
@@ -175,7 +181,12 @@ const initXr = (global: Global) => {
             const statusInterval = setInterval(() => {
                 const cp = camera.getPosition();
                 const re = reticle ? reticle.enabled : 'null';
-                dbg(`[AR] cam=${cp.x.toFixed(1)},${cp.y.toFixed(1)},${cp.z.toFixed(1)} reticle=${re} hits=${reticleHitCount}`);
+                const ge = gsplatEntity ? gsplatEntity.enabled : 'null';
+                dbg(`[AR] cam=${cp.x.toFixed(1)},${cp.y.toFixed(1)},${cp.z.toFixed(1)} reticle=${re} splat=${ge} placed=${arPlaced} hits=${reticleHitCount}`);
+                if (arPlaced && gsplatEntity) {
+                    const gp = gsplatEntity.getPosition();
+                    dbg(`[AR] splatPos=${gp.x.toFixed(2)},${gp.y.toFixed(2)},${gp.z.toFixed(2)} scale=${gsplatEntity.getLocalScale().x.toFixed(2)}`);
+                }
             }, 3000);
             app.xr.once('end', () => clearInterval(statusInterval));
 
