@@ -1,0 +1,8 @@
+node_modules
+dist
+public
+.DS_Store
+.npmrc
+.cursor
+cert.pem
+key.pem
