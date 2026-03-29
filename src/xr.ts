@@ -217,16 +217,22 @@ const initXr = (global: Global) => {
             }
 
             // Configure and run
+            const canvas = app.graphicsDevice.canvas as HTMLCanvasElement;
+
             window.XR8.XrController.configure({
                 disableWorldTracking: false,
                 scale: 'absolute'
             });
 
+            dbg(`[8thWall] canvas=${canvas.id} ${canvas.width}x${canvas.height}`);
+
             window.XR8.PlayCanvas.run(
-                { pcCamera: camera, pcApp: app },
+                { pcCamera: camera, pcApp: app, canvas },
                 [
+                    window.XR8.GlTextureRenderer.pipelineModule(),
                     window.XR8.XrController.pipelineModule(),
                     gsplatPipelineModule(),
+                    window.XRExtras?.AlmostThere?.pipelineModule?.(),
                     window.XRExtras?.Loading?.pipelineModule?.(),
                     window.XRExtras?.RuntimeError?.pipelineModule?.(),
                 ].filter(Boolean)
