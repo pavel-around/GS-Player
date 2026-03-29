@@ -164,12 +164,15 @@ const initXr = (global: Global) => {
                     camera.setRotation(rotation.x, rotation.y, rotation.z, rotation.w);
                 }
 
+                // Extract FOV from intrinsics instead of overriding readonly projectionMatrix
                 if (intrinsics) {
-                    const proj = new Mat4();
-                    proj.data.set(intrinsics);
-                    // @ts-ignore
-                    camera.camera.projectionMatrix = proj;
-                    camera.camera.horizontalFov = false;
+                    // intrinsics is a 16-float column-major projection matrix
+                    // Element [5] = 2*near/(top-bottom) ≈ 1/tan(fov/2)
+                    const fy = intrinsics[5];
+                    if (fy > 0) {
+                        const fovRad = 2 * Math.atan(1 / fy);
+                        camera.camera.fov = fovRad * (180 / Math.PI);
+                    }
                 }
 
                 if (reticle && !arPlaced) {
