@@ -210,22 +210,19 @@ const initXr = (global: Global) => {
         };
     };
 
-    // Touch handler
+    // Touch handler — tap turns reticle red (surface detection test)
     const onTouch = (e: TouchEvent) => {
         if (!arActive) return;
         if ((e.target as HTMLElement).tagName === 'BUTTON') return;
         if (!reticle || !reticle.enabled) return;
 
-        if (!gsplatEntity) gsplatEntity = app.root.findByName('gsplat') as Entity | null;
-        if (!gsplatEntity) return;
+        const mat = reticle.render!.meshInstances[0].material as StandardMaterial;
+        mat.diffuse = new Color(1, 0, 0);
+        mat.emissive = new Color(1, 0, 0);
+        mat.update();
 
         const rp = reticle.getPosition();
-        gsplatEntity.setPosition(rp.x, rp.y, rp.z);
-        gsplatEntity.setLocalScale(0.15, 0.15, 0.15);
-        gsplatEntity.setLocalEulerAngles(0, 0, 0);
-        gsplatEntity.enabled = true;
-        arPlaced = true;
-        dbg(`[8thWall] PLACED at ${rp.x.toFixed(2)},${rp.y.toFixed(2)},${rp.z.toFixed(2)}`);
+        dbg(`[8thWall] TAP at ${rp.x.toFixed(2)},${rp.y.toFixed(2)},${rp.z.toFixed(2)}`);
     };
     document.addEventListener('touchstart', onTouch);
 
