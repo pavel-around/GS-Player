@@ -64,7 +64,7 @@ const initXr = (global: Global) => {
     let gsplatEntity: Entity | null = null;
     let reticle: Entity | null = null;
     let xr8Loaded = false;
-    let cameraCanvas: HTMLCanvasElement | null = null;
+    let cameraVideo: HTMLVideoElement | null = null;
 
     const savedClearColor = new Color();
     const savedCameraPos = new Vec3();
@@ -94,7 +94,7 @@ const initXr = (global: Global) => {
     const playcanvasPipelineModule = () => {
         return {
             name: 'playcanvas-sync',
-            onStart: () => {
+            onStart: ({ GLctx }: any) => {
                 dbg('[8thWall] pipeline onStart');
                 arActive = true;
                 arPlaced = false;
@@ -113,7 +113,17 @@ const initXr = (global: Global) => {
                 // Transparent background — camera feed shows through
                 camera.camera.clearColor = new Color(0, 0, 0, 0);
 
-                // Make PlayCanvas canvas transparent so camera canvas shows behind
+                // Show camera feed as <video> background — avoids dual WebGL context issue on iOS
+                const video = document.querySelector('video');
+                if (video) {
+                    cameraVideo = video;
+                    cameraVideo.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;object-fit:cover;z-index:1;';
+                    dbg(`[8thWall] found <video> ${video.videoWidth}x${video.videoHeight}`);
+                } else {
+                    dbg('[8thWall] WARN: no <video> element found');
+                }
+
+                // PlayCanvas canvas on top of video
                 const pcCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
                 pcCanvas.style.position = 'fixed';
                 pcCanvas.style.top = '0';
@@ -183,9 +193,10 @@ const initXr = (global: Global) => {
 
                 if (reticle) reticle.enabled = false;
 
-                // Remove camera canvas
-                if (cameraCanvas) {
-                    cameraCanvas.style.display = 'none';
+                // Hide camera video
+                if (cameraVideo) {
+                    cameraVideo.style.cssText = '';
+                    cameraVideo = null;
                 }
 
                 const pcCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
@@ -240,26 +251,19 @@ const initXr = (global: Global) => {
                 xr8Loaded = true;
             }
 
-            // Create a separate canvas for 8th Wall camera feed (behind PlayCanvas)
-            if (!cameraCanvas) {
-                cameraCanvas = document.createElement('canvas');
-                cameraCanvas.id = 'camera-canvas';
-                cameraCanvas.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:1;';
-                document.body.prepend(cameraCanvas);
-            }
-            cameraCanvas.style.display = 'block';
-
-            dbg(`[8thWall] starting XR8.run() with camera canvas`);
+            const pcCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
+            dbg(`[8thWall] starting XR8.run() on PlayCanvas canvas`);
 
             // Add pipeline modules BEFORE run() — otherwise onStart is missed
+            // No GlTextureRenderer — camera feed shown via native <video> element
+            // This avoids dual WebGL context issue that freezes camera on iOS
             window.XR8.addCameraPipelineModules([
-                window.XR8.GlTextureRenderer.pipelineModule(),
                 window.XR8.XrController.pipelineModule(),
                 playcanvasPipelineModule(),
             ]);
 
             window.XR8.run({
-                canvas: cameraCanvas,
+                canvas: pcCanvas,
                 allowedDevices: window.XR8.XrConfig.device().ANY,
                 cameraConfig: { direction: window.XR8.XrConfig.camera().BACK }
             });
