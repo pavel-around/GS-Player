@@ -216,25 +216,23 @@ const initXr = (global: Global) => {
                 xr8Loaded = true;
             }
 
-            // Configure and run
+            // Configure (only before first run)
+            if (!xr8Loaded) {
+                window.XR8.XrController.configure({
+                    disableWorldTracking: false,
+                    scale: 'absolute'
+                });
+            }
+
             const canvas = app.graphicsDevice.canvas as HTMLCanvasElement;
-
-            window.XR8.XrController.configure({
-                disableWorldTracking: false,
-                scale: 'absolute'
-            });
-
             dbg(`[8thWall] canvas=${canvas.id} ${canvas.width}x${canvas.height}`);
 
+            // PlayCanvas integration handles camera feed rendering internally
             window.XR8.PlayCanvas.run(
                 { pcCamera: camera, pcApp: app, canvas },
                 [
-                    window.XR8.GlTextureRenderer.pipelineModule(),
                     window.XR8.XrController.pipelineModule(),
                     gsplatPipelineModule(),
-                    window.XRExtras?.AlmostThere?.pipelineModule?.(),
-                    window.XRExtras?.Loading?.pipelineModule?.(),
-                    window.XRExtras?.RuntimeError?.pipelineModule?.(),
                 ].filter(Boolean)
             );
 
