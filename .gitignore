@@ -2,6 +2,8 @@ node_modules
 dist
 public
 !public/8thwall/
+!public/scene.compressed.ply
+!public/settings.json
 .DS_Store
 .npmrc
 .cursor
