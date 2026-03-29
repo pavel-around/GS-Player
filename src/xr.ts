@@ -22,7 +22,7 @@ let debugEl: HTMLDivElement | null = null;
 const dbg = (msg: string) => {
     console.log(msg);
     debugLines.push(`${new Date().toLocaleTimeString()} ${msg}`);
-    if (debugLines.length > 20) debugLines.shift();
+    if (debugLines.length > 30) debugLines.shift();
     if (!debugEl) {
         debugEl = document.createElement('div');
         debugEl.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:rgba(0,0,0,0.7);color:#0f0;font:12px monospace;padding:8px;max-height:40vh;overflow-y:auto;pointer-events:none;';
@@ -64,7 +64,8 @@ const initXr = (global: Global) => {
     let gsplatEntity: Entity | null = null;
     let reticle: Entity | null = null;
     let xr8Loaded = false;
-    let cameraVideo: HTMLVideoElement | null = null;
+    let slamCanvas: HTMLCanvasElement | null = null;
+    let updateCount = 0;
 
     const savedClearColor = new Color();
     const savedCameraPos = new Vec3();
@@ -90,12 +91,20 @@ const initXr = (global: Global) => {
         return entity;
     };
 
-    // Custom pipeline module — manually syncs 8th Wall pose to PlayCanvas camera
+    // Find the <video> element 8th Wall creates for camera access
+    const findCameraVideo = (): HTMLVideoElement | null => {
+        const videos = document.querySelectorAll('video');
+        for (const v of videos) {
+            if (v.srcObject) return v;
+        }
+        return null;
+    };
+
     const playcanvasPipelineModule = () => {
         return {
             name: 'playcanvas-sync',
-            onStart: ({ GLctx }: any) => {
-                dbg('[8thWall] pipeline onStart');
+            onStart: () => {
+                dbg('[pipeline] onStart fired');
                 arActive = true;
                 arPlaced = false;
                 app.autoRender = true;
@@ -106,58 +115,63 @@ const initXr = (global: Global) => {
                 savedParentPos.copy(parent.getPosition());
                 savedParentRot.copy(parent.getRotation());
 
-                // Reset parent transform for clean AR tracking
                 parent.setPosition(0, 0, 0);
                 parent.setEulerAngles(0, 0, 0);
-
-                // Transparent background — camera feed shows through
                 camera.camera.clearColor = new Color(0, 0, 0, 0);
 
-                // Show camera feed as <video> background — avoids dual WebGL context issue on iOS
-                const video = document.querySelector('video');
-                if (video) {
-                    cameraVideo = video;
-                    cameraVideo.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;object-fit:cover;z-index:1;';
-                    dbg(`[8thWall] found <video> ${video.videoWidth}x${video.videoHeight}`);
-                } else {
-                    dbg('[8thWall] WARN: no <video> element found');
-                }
-
-                // PlayCanvas canvas on top of video
+                // PlayCanvas canvas on top
                 const pcCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
                 pcCanvas.style.position = 'fixed';
                 pcCanvas.style.top = '0';
                 pcCanvas.style.left = '0';
-                pcCanvas.style.zIndex = '2';
+                pcCanvas.style.zIndex = '3';
 
                 gsplatEntity = app.root.findByName('gsplat') as Entity | null;
                 if (gsplatEntity) gsplatEntity.enabled = false;
 
                 if (!reticle) reticle = buildReticle();
                 reticle.enabled = false;
+
+                // Find and style the camera video (8th Wall creates it)
+                setTimeout(() => {
+                    const video = findCameraVideo();
+                    if (video) {
+                        video.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;object-fit:cover;z-index:1;';
+                        dbg(`[pipeline] video found: ${video.videoWidth}x${video.videoHeight}`);
+                    } else {
+                        dbg('[pipeline] WARN: no camera video found');
+                    }
+                }, 500);
             },
             onUpdate: ({ processCpuResult }: any) => {
+                updateCount++;
+                if (updateCount <= 3 || updateCount % 60 === 0) {
+                    const keys = processCpuResult ? Object.keys(processCpuResult) : ['null'];
+                    dbg(`[pipeline] onUpdate #${updateCount} keys=[${keys}]`);
+                }
+
                 const reality = processCpuResult?.reality;
                 if (!reality) return;
 
                 const { rotation, position, intrinsics } = reality;
 
-                // Apply 8th Wall camera pose to PlayCanvas camera
+                if (updateCount <= 3) {
+                    dbg(`[pipeline] reality: pos=${JSON.stringify(position)} rot=${!!rotation} intr=${!!intrinsics}`);
+                }
+
                 if (rotation && position) {
                     camera.setPosition(position.x, position.y, position.z);
                     camera.setRotation(rotation.x, rotation.y, rotation.z, rotation.w);
                 }
 
-                // Apply projection matrix
                 if (intrinsics) {
                     const proj = new Mat4();
                     proj.data.set(intrinsics);
-                    // @ts-ignore — direct projection matrix override
+                    // @ts-ignore
                     camera.camera.projectionMatrix = proj;
                     camera.camera.horizontalFov = false;
                 }
 
-                // Reticle on ground in front of camera
                 if (reticle && !arPlaced) {
                     reticle.enabled = true;
                     const cam = camera.getPosition();
@@ -169,11 +183,13 @@ const initXr = (global: Global) => {
                     );
                 }
 
-                // Trigger PlayCanvas render
                 app.renderNextFrame = true;
             },
+            onException: (error: any) => {
+                dbg(`[pipeline] EXCEPTION: ${error}`);
+            },
             onDetach: () => {
-                dbg('[8thWall] pipeline onDetach');
+                dbg('[pipeline] onDetach');
                 arActive = false;
                 arPlaced = false;
                 app.autoRender = false;
@@ -193,19 +209,18 @@ const initXr = (global: Global) => {
 
                 if (reticle) reticle.enabled = false;
 
-                // Hide camera video
-                if (cameraVideo) {
-                    cameraVideo.style.cssText = '';
-                    cameraVideo = null;
-                }
+                // Hide slam canvas
+                if (slamCanvas) slamCanvas.style.display = 'none';
+
+                // Reset video
+                const video = findCameraVideo();
+                if (video) video.style.cssText = '';
 
                 const pcCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
                 pcCanvas.style.position = '';
                 pcCanvas.style.zIndex = '';
 
-                requestAnimationFrame(() => {
-                    app.renderNextFrame = true;
-                });
+                requestAnimationFrame(() => { app.renderNextFrame = true; });
             }
         };
     };
@@ -214,6 +229,9 @@ const initXr = (global: Global) => {
     const onTouch = (e: TouchEvent) => {
         if (!arActive) return;
         if ((e.target as HTMLElement).tagName === 'BUTTON') return;
+
+        dbg(`[touch] tap detected, reticle=${reticle?.enabled}`);
+
         if (!reticle || !reticle.enabled) return;
 
         const mat = reticle.render!.meshInstances[0].material as StandardMaterial;
@@ -222,7 +240,7 @@ const initXr = (global: Global) => {
         mat.update();
 
         const rp = reticle.getPosition();
-        dbg(`[8thWall] TAP at ${rp.x.toFixed(2)},${rp.y.toFixed(2)},${rp.z.toFixed(2)}`);
+        dbg(`[touch] RETICLE RED at ${rp.x.toFixed(2)},${rp.y.toFixed(2)},${rp.z.toFixed(2)}`);
     };
     document.addEventListener('touchstart', onTouch);
 
@@ -236,9 +254,9 @@ const initXr = (global: Global) => {
                 await loadScript('./8thwall/xrextras.js');
                 dbg('[8thWall] xrextras loaded');
                 await loadScript('./8thwall/xr.js', { 'data-preload-chunks': 'slam' });
-                dbg('[8thWall] xr.js added');
+                dbg('[8thWall] xr.js loaded');
                 await waitForXR8();
-                dbg('[8thWall] XR8 ready');
+                dbg('[8thWall] XR8 global ready');
 
                 window.XR8.XrController.configure({
                     disableWorldTracking: false,
@@ -248,28 +266,38 @@ const initXr = (global: Global) => {
                 xr8Loaded = true;
             }
 
-            const pcCanvas = app.graphicsDevice.canvas as HTMLCanvasElement;
-            dbg(`[8thWall] starting XR8.run() on PlayCanvas canvas`);
+            // Separate canvas for 8th Wall SLAM — keeps PlayCanvas WebGL context alive
+            if (!slamCanvas) {
+                slamCanvas = document.createElement('canvas');
+                slamCanvas.id = 'xr8-slam-canvas';
+                slamCanvas.width = 320;
+                slamCanvas.height = 240;
+                slamCanvas.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;z-index:0;pointer-events:none;';
+                document.body.appendChild(slamCanvas);
+            }
+            slamCanvas.style.display = 'block';
 
-            // Add pipeline modules BEFORE run() — otherwise onStart is missed
-            // No GlTextureRenderer — camera feed shown via native <video> element
-            // This avoids dual WebGL context issue that freezes camera on iOS
+            updateCount = 0;
+            dbg('[8thWall] adding pipeline modules...');
+
             window.XR8.addCameraPipelineModules([
                 window.XR8.XrController.pipelineModule(),
                 playcanvasPipelineModule(),
             ]);
 
+            dbg('[8thWall] calling XR8.run()...');
+
             window.XR8.run({
-                canvas: pcCanvas,
+                canvas: slamCanvas,
                 allowedDevices: window.XR8.XrConfig.device().ANY,
                 cameraConfig: { direction: window.XR8.XrConfig.camera().BACK }
             });
 
-            dbg('[8thWall] AR started');
+            dbg('[8thWall] XR8.run() called');
             exitBtn.style.display = 'block';
             arBtn.style.display = 'none';
         } catch (err: any) {
-            dbg(`[8thWall] ERROR: ${err.message}`);
+            dbg(`[8thWall] ERROR: ${err.message}\n${err.stack?.slice(0, 200)}`);
             arBtn.textContent = 'START AR';
             arBtn.style.pointerEvents = 'auto';
         }
