@@ -1,6 +1,7 @@
 node_modules
 dist
 public
+!public/8thwall/
 .DS_Store
 .npmrc
 .cursor

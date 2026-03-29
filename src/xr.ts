@@ -6,10 +6,16 @@ import {
     Vec3,
     type CameraComponent
 } from 'playcanvas';
-import { XrControllers } from 'playcanvas/scripts/esm/xr-controllers.mjs';
-import { XrNavigation } from 'playcanvas/scripts/esm/xr-navigation.mjs';
 
 import { Global } from './types';
+
+// Declare 8th Wall globals
+declare global {
+    interface Window {
+        XR8: any;
+        XRExtras: any;
+    }
+}
 
 // On-screen debug overlay
 const debugLines: string[] = [];
@@ -22,8 +28,7 @@ const dbg = (msg: string) => {
     if (!debugEl) {
         debugEl = document.createElement('div');
         debugEl.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:rgba(0,0,0,0.7);color:#0f0;font:12px monospace;padding:8px;max-height:40vh;overflow-y:auto;pointer-events:none;';
-        const overlay = document.getElementById('ar-overlay');
-        (overlay || document.body).appendChild(debugEl);
+        document.body.appendChild(debugEl);
     }
     debugEl.textContent = debugLines.join('\n');
 };
@@ -31,34 +36,32 @@ const dbg = (msg: string) => {
 const initXr = (global: Global) => {
     const { app, events, state, camera } = global;
 
-    state.hasAR = app.xr.isAvailable('immersive-ar');
-    state.hasVR = app.xr.isAvailable('immersive-vr');
-    dbg(`[XR init] hasAR=${state.hasAR}, hasVR=${state.hasVR}`);
+    // Check if 8th Wall is available
+    const has8thWall = typeof window.XR8 !== 'undefined';
 
-    app.xr.on('available:immersive-ar', (available) => {
-        dbg(`[XR] immersive-ar available: ${available}`);
-        state.hasAR = available;
-    });
-    app.xr.on('available:immersive-vr', (available) => {
-        state.hasVR = available;
-    });
+    // Also check native WebXR for Android (can use either)
+    state.hasAR = has8thWall || (app.xr?.isAvailable?.('immersive-ar') ?? false);
+    state.hasVR = app.xr?.isAvailable?.('immersive-vr') ?? false;
+    dbg(`[XR init] has8thWall=${has8thWall}, hasAR=${state.hasAR}, hasVR=${state.hasVR}`);
 
-    const parent = camera.parent as Entity;
-    const clearColor = new Color();
-    const parentPosition = new Vec3();
-    const parentRotation = new Quat();
-    const cameraPosition = new Vec3();
-    const cameraRotation = new Quat();
-    const angles = new Vec3();
+    if (!has8thWall) {
+        dbg('[XR] 8th Wall not loaded, AR disabled');
+        return;
+    }
 
-    parent.addComponent('script');
-    const xrCtrl = parent.script.create(XrControllers);
-    const xrNav = parent.script.create(XrNavigation);
-
+    let arActive = false;
     let arPlaced = false;
     let gsplatEntity: Entity | null = null;
     let reticle: Entity | null = null;
-    let reticleHitCount = 0;
+
+    // Save original state for restoration
+    const savedClearColor = new Color();
+    const savedCameraPos = new Vec3();
+    const savedCameraRot = new Quat();
+    const savedParentPos = new Vec3();
+    const savedParentRot = new Quat();
+
+    const parent = camera.parent as Entity;
 
     const buildReticle = () => {
         const entity = new Entity('ar-reticle');
@@ -76,206 +79,181 @@ const initXr = (global: Global) => {
         return entity;
     };
 
-    // ---- XR START ----
-    app.xr.on('start', () => {
-        app.autoRender = true;
-        dbg(`[XR] started, type=${app.xr.type}`);
+    // Custom pipeline module to place gsplat
+    const gsplatPipelineModule = () => {
+        return {
+            name: 'gsplat-placement',
+            onStart: () => {
+                dbg('[8thWall] pipeline started');
+                arActive = true;
+                arPlaced = false;
+                app.autoRender = true;
 
-        parentPosition.copy(parent.getPosition());
-        parentRotation.copy(parent.getRotation());
-        cameraPosition.copy(camera.getPosition());
-        cameraRotation.copy(camera.getRotation());
-        cameraRotation.getEulerAngles(angles);
+                // Save state
+                savedClearColor.copy(camera.camera.clearColor);
+                savedCameraPos.copy(camera.getPosition());
+                savedCameraRot.copy(camera.getRotation());
+                savedParentPos.copy(parent.getPosition());
+                savedParentRot.copy(parent.getRotation());
 
-        if (app.xr.type === 'immersive-ar') {
-            // Reset parent for clean AR tracking
-            parent.setPosition(0, 0, 0);
-            parent.setEulerAngles(0, 0, 0);
+                // Hide gsplat until placed
+                gsplatEntity = app.root.findByName('gsplat') as Entity | null;
+                if (gsplatEntity) gsplatEntity.enabled = false;
 
-            if (xrCtrl) xrCtrl.enabled = false;
-            if (xrNav) {
-                xrNav.enabled = false;
-                // Kill ALL XR input listeners — tryTeleport on selectend moves the camera parent
-                for (const [src, handlers] of xrNav.inputHandlers) {
-                    src.off('selectstart', handlers.handleSelectStart);
-                    src.off('selectend', handlers.handleSelectEnd);
+                // Build reticle
+                if (!reticle) reticle = buildReticle();
+                reticle.enabled = false;
+
+                // Transparent background for AR
+                camera.camera.clearColor = new Color(0, 0, 0, 0);
+            },
+            onUpdate: ({ processCpuResult }: any) => {
+                if (!processCpuResult?.reality) return;
+                const { position } = processCpuResult.reality;
+
+                // Use camera position as approximate ground point for reticle
+                // 8th Wall places the ground at y=0
+                if (reticle && !arPlaced) {
+                    reticle.enabled = true;
+                    // Project reticle to ground plane in front of camera
+                    const cam = camera.getPosition();
+                    const fwd = camera.forward;
+                    // Place reticle 1.5m in front of camera on ground (y=0)
+                    reticle.setPosition(
+                        cam.x + fwd.x * 1.5,
+                        0,
+                        cam.z + fwd.z * 1.5
+                    );
                 }
-                xrNav.inputHandlers.clear();
-                xrNav.inputSources.clear();
-                xrNav.activePointers.clear();
-                // Remove the 'add' listener so new XR input sources don't get handlers
-                app.xr.input.off('add');
-                dbg('[AR] xrNav input listeners removed');
+            },
+            onDetach: () => {
+                dbg('[8thWall] pipeline detached');
+                arActive = false;
+                arPlaced = false;
+                app.autoRender = false;
+
+                // Restore gsplat
+                if (gsplatEntity) {
+                    gsplatEntity.enabled = true;
+                    gsplatEntity.setLocalScale(1, 1, 1);
+                    gsplatEntity.setPosition(0, 0, 0);
+                    gsplatEntity.setLocalEulerAngles(0, 0, 180);
+                }
+
+                // Restore camera
+                camera.camera.clearColor = savedClearColor;
+                camera.setPosition(savedCameraPos);
+                camera.setRotation(savedCameraRot);
+                parent.setPosition(savedParentPos);
+                parent.setRotation(savedParentRot);
+
+                if (reticle) reticle.enabled = false;
+
+                // Re-show canvas
+                requestAnimationFrame(() => {
+                    document.body.prepend(app.graphicsDevice.canvas);
+                    app.renderNextFrame = true;
+                });
             }
-
-            clearColor.copy(camera.camera.clearColor);
-            camera.camera.clearColor = new Color(0, 0, 0, 0);
-
-            // Hide splat, wait for tap
-            gsplatEntity = app.root.findByName('gsplat') as Entity | null;
-            dbg(`[AR] gsplat found: ${!!gsplatEntity}`);
-            if (gsplatEntity) gsplatEntity.enabled = false;
-            arPlaced = false;
-            reticleHitCount = 0;
-
-            if (!reticle) reticle = buildReticle();
-            reticle.enabled = false;
-
-            // Start hit tests
-            dbg(`[AR] hitTest supported=${app.xr.hitTest.supported}`);
-
-            // Viewer hit test — reticle on surface
-            app.xr.hitTest.start({
-                spaceType: 'viewer',
-                callback: (err: any, hitTestSource: any) => {
-                    if (err) {
-                        dbg(`[AR] viewer hitTest ERR: ${err.message}`);
-                        return;
-                    }
-                    dbg('[AR] viewer hitTest started');
-                    hitTestSource.on('result', (position: Vec3, rotation: Quat) => {
-                        reticleHitCount++;
-                        if (reticleHitCount <= 5 || reticleHitCount % 50 === 0) {
-                            dbg(`[AR] reticle #${reticleHitCount}: ${position.x.toFixed(2)},${position.y.toFixed(2)},${position.z.toFixed(2)}`);
-                        }
-                        if (reticle) {
-                            reticle.enabled = true;
-                            reticle.setPosition(position);
-                            reticle.setRotation(rotation);
-                        }
-                    });
-                }
-            });
-
-            // DOM touch — place gsplat at reticle position
-            const onTouch = (e: TouchEvent) => {
-                e.stopPropagation();
-                if ((e.target as HTMLElement).tagName === 'BUTTON') return;
-                if (reticleHitCount < 1 || !reticle || !reticle.enabled) {
-                    dbg(`[AR] TAP ignored — no reticle yet (hits=${reticleHitCount})`);
-                    return;
-                }
-
-                if (!gsplatEntity) gsplatEntity = app.root.findByName('gsplat') as Entity | null;
-                if (!gsplatEntity) {
-                    dbg('[AR] TAP — gsplat entity not found');
-                    return;
-                }
-
-                const rp = reticle.getPosition();
-                gsplatEntity.setPosition(rp.x, rp.y, rp.z);
-                gsplatEntity.setLocalScale(0.15, 0.15, 0.15);
-                gsplatEntity.setLocalEulerAngles(0, 0, 0);
-                gsplatEntity.enabled = true;
-                arPlaced = true;
-                dbg(`[AR] PLACED splat at ${rp.x.toFixed(2)},${rp.y.toFixed(2)},${rp.z.toFixed(2)}`);
-            };
-            overlayEl.style.pointerEvents = 'auto';
-            overlayEl.addEventListener('touchstart', onTouch);
-            app.xr.once('end', () => {
-                overlayEl.removeEventListener('touchstart', onTouch);
-                overlayEl.style.pointerEvents = 'none';
-            });
-
-            // Periodic status log
-            const statusInterval = setInterval(() => {
-                const cp = camera.getPosition();
-                const re = reticle ? reticle.enabled : 'null';
-                const ge = gsplatEntity ? gsplatEntity.enabled : 'null';
-                dbg(`[AR] cam=${cp.x.toFixed(1)},${cp.y.toFixed(1)},${cp.z.toFixed(1)} reticle=${re} splat=${ge} placed=${arPlaced} hits=${reticleHitCount}`);
-                if (arPlaced && gsplatEntity) {
-                    const gp = gsplatEntity.getPosition();
-                    dbg(`[AR] splatPos=${gp.x.toFixed(2)},${gp.y.toFixed(2)},${gp.z.toFixed(2)} scale=${gsplatEntity.getLocalScale().x.toFixed(2)}`);
-                }
-            }, 3000);
-            app.xr.once('end', () => clearInterval(statusInterval));
-
-        } else {
-            parent.setPosition(cameraPosition.x, 0, cameraPosition.z);
-            parent.setEulerAngles(0, angles.y, 0);
-        }
-    });
-
-    // ---- XR END ----
-    app.xr.on('end', () => {
-        dbg(`[XR] END fired! type=${app.xr.type}`);
-        app.autoRender = false;
-        if (xrCtrl) xrCtrl.enabled = true;
-        if (xrNav) xrNav.enabled = true;
-        arPlaced = false;
-
-        if (gsplatEntity) {
-            gsplatEntity.enabled = true;
-            gsplatEntity.setLocalScale(1, 1, 1);
-            gsplatEntity.setPosition(0, 0, 0);
-            gsplatEntity.setLocalEulerAngles(0, 0, 180);
-        }
-        if (reticle) reticle.enabled = false;
-
-        parent.setPosition(parentPosition);
-        parent.setRotation(parentRotation);
-        camera.setPosition(cameraPosition);
-        camera.setRotation(cameraRotation);
-        if (app.xr.type === 'immersive-ar') {
-            camera.camera.clearColor = clearColor;
-        }
-        requestAnimationFrame(() => {
-            document.body.prepend(app.graphicsDevice.canvas);
-            app.renderNextFrame = true;
-        });
-    });
-
-    // DOM overlay for AR
-    const overlayEl = document.createElement('div');
-    overlayEl.id = 'ar-overlay';
-    overlayEl.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:99999;pointer-events:none;';
-
-    const exitBtn = document.createElement('button');
-    exitBtn.textContent = 'EXIT AR';
-    exitBtn.style.cssText = 'position:fixed;bottom:40px;left:50%;transform:translateX(-50%);padding:16px 32px;font-size:20px;font-weight:bold;background:#ff4444;color:#fff;border:none;border-radius:12px;pointer-events:auto;cursor:pointer;display:none;';
-    exitBtn.addEventListener('click', () => {
-        dbg('[AR] exit clicked');
-        app.xr.end();
-    });
-    overlayEl.appendChild(exitBtn);
-
-    app.xr.on('start', () => {
-        if (app.xr.type === 'immersive-ar') exitBtn.style.display = 'block';
-    });
-    app.xr.on('end', () => { exitBtn.style.display = 'none'; });
-    document.body.appendChild(overlayEl);
-
-    if (debugEl) {
-        overlayEl.appendChild(debugEl);
-        debugEl.style.pointerEvents = 'none';
-    }
-
-    const start = (type: string) => {
-        camera.camera.nearClip = 0.01;
-        camera.camera.farClip = 1000;
-        if (type === 'immersive-ar') {
-            app.xr.domOverlay.root = overlayEl;
-            dbg('[AR] domOverlay set, starting...');
-        }
-        app.xr.start(app.root.findComponent('camera') as CameraComponent, type, 'local-floor');
+        };
     };
 
-    events.on('startAR', () => start('immersive-ar'));
-    events.on('startVR', () => start('immersive-vr'));
+    // Touch handler for placing gsplat
+    const onTouch = (e: TouchEvent) => {
+        if (!arActive) return;
+        if ((e.target as HTMLElement).tagName === 'BUTTON') return;
+        if (!reticle || !reticle.enabled) return;
 
-    // Test AR button
-    const testBtn = document.createElement('button');
-    testBtn.textContent = 'START AR';
-    testBtn.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:99999;padding:20px 40px;font-size:24px;font-weight:bold;background:#7B72FF;color:#fff;border:none;border-radius:12px;cursor:pointer;';
-    testBtn.addEventListener('click', () => {
-        dbg('[AR] button clicked');
-        events.fire('startAR');
+        if (!gsplatEntity) gsplatEntity = app.root.findByName('gsplat') as Entity | null;
+        if (!gsplatEntity) {
+            dbg('[8thWall] gsplat entity not found');
+            return;
+        }
+
+        const rp = reticle.getPosition();
+        gsplatEntity.setPosition(rp.x, rp.y, rp.z);
+        gsplatEntity.setLocalScale(0.15, 0.15, 0.15);
+        gsplatEntity.setLocalEulerAngles(0, 0, 0);
+        gsplatEntity.enabled = true;
+        arPlaced = true;
+        dbg(`[8thWall] PLACED splat at ${rp.x.toFixed(2)},${rp.y.toFixed(2)},${rp.z.toFixed(2)}`);
+    };
+
+    document.addEventListener('touchstart', onTouch);
+
+    // Start AR with 8th Wall
+    const startAR = () => {
+        dbg('[8thWall] starting AR...');
+
+        const pcCamera = camera;
+        const pcApp = app;
+        const canvas = app.graphicsDevice.canvas as HTMLCanvasElement;
+
+        try {
+            // Configure XR controller
+            window.XR8.XrController.configure({
+                disableWorldTracking: false,
+                scale: 'absolute'
+            });
+
+            // Run with PlayCanvas integration
+            window.XR8.PlayCanvas.run(
+                { pcCamera, pcApp },
+                [
+                    window.XR8.XrController.pipelineModule(),
+                    gsplatPipelineModule(),
+                    window.XRExtras?.Loading?.pipelineModule?.(),
+                    window.XRExtras?.RuntimeError?.pipelineModule?.(),
+                ].filter(Boolean)
+            );
+
+            dbg('[8thWall] XR8.PlayCanvas.run() called');
+        } catch (err: any) {
+            dbg(`[8thWall] ERROR: ${err.message}`);
+        }
+    };
+
+    const stopAR = () => {
+        dbg('[8thWall] stopping AR...');
+        try {
+            window.XR8.stop();
+        } catch (err: any) {
+            dbg(`[8thWall] stop error: ${err.message}`);
+        }
+    };
+
+    // Exit button
+    const exitBtn = document.createElement('button');
+    exitBtn.textContent = 'EXIT AR';
+    exitBtn.style.cssText = 'position:fixed;bottom:40px;left:50%;transform:translateX(-50%);padding:16px 32px;font-size:20px;font-weight:bold;background:#ff4444;color:#fff;border:none;border-radius:12px;cursor:pointer;z-index:99999;display:none;';
+    exitBtn.addEventListener('click', () => {
+        stopAR();
+        exitBtn.style.display = 'none';
     });
-    document.body.appendChild(testBtn);
+    document.body.appendChild(exitBtn);
+
+    // AR button
+    const arBtn = document.createElement('button');
+    arBtn.textContent = 'START AR';
+    arBtn.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:99999;padding:20px 40px;font-size:24px;font-weight:bold;background:#7B72FF;color:#fff;border:none;border-radius:12px;cursor:pointer;';
+    arBtn.addEventListener('click', () => {
+        startAR();
+        exitBtn.style.display = 'block';
+        arBtn.style.display = 'none';
+    });
+    document.body.appendChild(arBtn);
+
+    events.on('startAR', () => {
+        startAR();
+        exitBtn.style.display = 'block';
+        arBtn.style.display = 'none';
+    });
 
     events.on('inputEvent', (event) => {
-        if (event === 'cancel' && app.xr.active) {
-            app.xr.end();
+        if (event === 'cancel' && arActive) {
+            stopAR();
+            exitBtn.style.display = 'none';
+            arBtn.style.display = 'block';
         }
     });
 };
