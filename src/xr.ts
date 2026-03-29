@@ -33,26 +33,42 @@ const dbg = (msg: string) => {
     debugEl.textContent = debugLines.join('\n');
 };
 
+// Load a script dynamically, returns a promise
+const loadScript = (src: string, attrs?: Record<string, string>): Promise<void> => {
+    return new Promise((resolve, reject) => {
+        const existing = document.querySelector(`script[src="${src}"]`);
+        if (existing) { resolve(); return; }
+        const s = document.createElement('script');
+        s.src = src;
+        if (attrs) Object.entries(attrs).forEach(([k, v]) => s.setAttribute(k, v));
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error(`Failed to load ${src}`));
+        document.head.appendChild(s);
+    });
+};
+
+// Wait for window.XR8 to be defined (xr.js loads async)
+const waitForXR8 = (): Promise<void> => {
+    return new Promise((resolve) => {
+        if (window.XR8) { resolve(); return; }
+        window.addEventListener('xrloaded', () => resolve(), { once: true });
+    });
+};
+
 const initXr = (global: Global) => {
     const { app, events, state, camera } = global;
 
-    // Check if 8th Wall is available
-    const has8thWall = typeof window.XR8 !== 'undefined';
-
-    // Also check native WebXR for Android (can use either)
-    state.hasAR = has8thWall || (app.xr?.isAvailable?.('immersive-ar') ?? false);
-    state.hasVR = app.xr?.isAvailable?.('immersive-vr') ?? false;
-    dbg(`[XR init] has8thWall=${has8thWall}, hasAR=${state.hasAR}, hasVR=${state.hasVR}`);
-
-    if (!has8thWall) {
-        dbg('[XR] 8th Wall not loaded, AR disabled');
-        return;
-    }
+    // Always show AR button on mobile — 8th Wall works everywhere
+    const isMobile = /iPhone|iPad|Android/i.test(navigator.userAgent);
+    state.hasAR = isMobile;
+    state.hasVR = false;
+    dbg(`[XR init] isMobile=${isMobile}, hasAR=${state.hasAR}`);
 
     let arActive = false;
     let arPlaced = false;
     let gsplatEntity: Entity | null = null;
     let reticle: Entity | null = null;
+    let xr8Loaded = false;
 
     // Save original state for restoration
     const savedClearColor = new Color();
@@ -109,16 +125,13 @@ const initXr = (global: Global) => {
             },
             onUpdate: ({ processCpuResult }: any) => {
                 if (!processCpuResult?.reality) return;
-                const { position } = processCpuResult.reality;
 
-                // Use camera position as approximate ground point for reticle
                 // 8th Wall places the ground at y=0
                 if (reticle && !arPlaced) {
                     reticle.enabled = true;
                     // Project reticle to ground plane in front of camera
                     const cam = camera.getPosition();
                     const fwd = camera.forward;
-                    // Place reticle 1.5m in front of camera on ground (y=0)
                     reticle.setPosition(
                         cam.x + fwd.x * 1.5,
                         0,
@@ -149,7 +162,6 @@ const initXr = (global: Global) => {
 
                 if (reticle) reticle.enabled = false;
 
-                // Re-show canvas
                 requestAnimationFrame(() => {
                     document.body.prepend(app.graphicsDevice.canvas);
                     app.renderNextFrame = true;
@@ -181,24 +193,37 @@ const initXr = (global: Global) => {
 
     document.addEventListener('touchstart', onTouch);
 
-    // Start AR with 8th Wall
-    const startAR = () => {
-        dbg('[8thWall] starting AR...');
-
-        const pcCamera = camera;
-        const pcApp = app;
-        const canvas = app.graphicsDevice.canvas as HTMLCanvasElement;
+    // Load 8th Wall scripts on demand, then start AR
+    const loadAndStartAR = async () => {
+        dbg('[8thWall] loading scripts...');
+        arBtn.textContent = 'Loading...';
+        arBtn.style.pointerEvents = 'none';
 
         try {
-            // Configure XR controller
+            if (!xr8Loaded) {
+                // Load xrextras first (sync dependency)
+                await loadScript('./8thwall/xrextras.js');
+                dbg('[8thWall] xrextras loaded');
+
+                // Load xr.js with SLAM preload
+                await loadScript('./8thwall/xr.js', { 'data-preload-chunks': 'slam' });
+                dbg('[8thWall] xr.js script added');
+
+                // Wait for XR8 to initialize
+                await waitForXR8();
+                dbg('[8thWall] XR8 ready');
+
+                xr8Loaded = true;
+            }
+
+            // Configure and run
             window.XR8.XrController.configure({
                 disableWorldTracking: false,
                 scale: 'absolute'
             });
 
-            // Run with PlayCanvas integration
             window.XR8.PlayCanvas.run(
-                { pcCamera, pcApp },
+                { pcCamera: camera, pcApp: app },
                 [
                     window.XR8.XrController.pipelineModule(),
                     gsplatPipelineModule(),
@@ -207,9 +232,13 @@ const initXr = (global: Global) => {
                 ].filter(Boolean)
             );
 
-            dbg('[8thWall] XR8.PlayCanvas.run() called');
+            dbg('[8thWall] AR started');
+            exitBtn.style.display = 'block';
+            arBtn.style.display = 'none';
         } catch (err: any) {
             dbg(`[8thWall] ERROR: ${err.message}`);
+            arBtn.textContent = 'START AR';
+            arBtn.style.pointerEvents = 'auto';
         }
     };
 
@@ -220,40 +249,31 @@ const initXr = (global: Global) => {
         } catch (err: any) {
             dbg(`[8thWall] stop error: ${err.message}`);
         }
+        exitBtn.style.display = 'none';
+        arBtn.style.display = 'block';
+        arBtn.textContent = 'START AR';
+        arBtn.style.pointerEvents = 'auto';
     };
 
     // Exit button
     const exitBtn = document.createElement('button');
     exitBtn.textContent = 'EXIT AR';
     exitBtn.style.cssText = 'position:fixed;bottom:40px;left:50%;transform:translateX(-50%);padding:16px 32px;font-size:20px;font-weight:bold;background:#ff4444;color:#fff;border:none;border-radius:12px;cursor:pointer;z-index:99999;display:none;';
-    exitBtn.addEventListener('click', () => {
-        stopAR();
-        exitBtn.style.display = 'none';
-    });
+    exitBtn.addEventListener('click', stopAR);
     document.body.appendChild(exitBtn);
 
     // AR button
     const arBtn = document.createElement('button');
     arBtn.textContent = 'START AR';
     arBtn.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:99999;padding:20px 40px;font-size:24px;font-weight:bold;background:#7B72FF;color:#fff;border:none;border-radius:12px;cursor:pointer;';
-    arBtn.addEventListener('click', () => {
-        startAR();
-        exitBtn.style.display = 'block';
-        arBtn.style.display = 'none';
-    });
+    arBtn.addEventListener('click', loadAndStartAR);
     document.body.appendChild(arBtn);
 
-    events.on('startAR', () => {
-        startAR();
-        exitBtn.style.display = 'block';
-        arBtn.style.display = 'none';
-    });
+    events.on('startAR', loadAndStartAR);
 
     events.on('inputEvent', (event) => {
         if (event === 'cancel' && arActive) {
             stopAR();
-            exitBtn.style.display = 'none';
-            arBtn.style.display = 'block';
         }
     });
 };
