@@ -60,7 +60,8 @@
     "rollup-plugin-string": "3.0.0",
     "sass": "1.98.0",
     "serve": "14.2.6",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "wrangler": "^4.78.0"
   },
   "scripts": {
     "build": "rollup -c",

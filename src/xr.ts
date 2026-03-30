@@ -1,12 +1,14 @@
+import * as pc from 'playcanvas';
 import {
     Color,
     Entity,
-    Quat,
     StandardMaterial,
-    Vec3,
 } from 'playcanvas';
 
 import { Global } from './types';
+
+// 8th Wall's built-in PlayCanvas module references `pc` as a global (pc.Color, pc.Entity, etc.)
+(window as any).pc = pc;
 
 declare global {
     interface Window {
@@ -80,7 +82,9 @@ const initXr = (global: Global) => {
         return entity;
     };
 
-    // Custom pipeline module — runs inside 8th Wall's pipeline alongside the official PlayCanvas module
+    // Custom pipeline module — runs inside 8th Wall's pipeline alongside the official PlayCanvas module.
+    // Camera sync (position, rotation, FOV) is handled by the built-in XR8.PlayCanvas module.
+    // This module only handles reticle placement via ground-plane raycast.
     const reticlePipelineModule = () => {
         let updateCount = 0;
         return {
@@ -96,14 +100,13 @@ const initXr = (global: Global) => {
                 if (!reticle) reticle = buildReticle();
                 reticle.enabled = false;
             },
-            onUpdate: ({ processCpuResult }: any) => {
+            onUpdate: () => {
                 updateCount++;
-                const reality = processCpuResult?.reality;
-                if (!reality) return;
 
                 if (updateCount <= 5 || updateCount % 120 === 0) {
-                    const { position, trackingStatus } = reality;
-                    dbg(`[pose] ${position.x.toFixed(2)},${position.y.toFixed(2)},${position.z.toFixed(2)} trk=${trackingStatus}`);
+                    const p = camera.getPosition();
+                    const f = camera.forward;
+                    dbg(`[pose] pos=${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)} fwd=${f.x.toFixed(2)},${f.y.toFixed(2)},${f.z.toFixed(2)}`);
                 }
 
                 // Ground plane reticle: camera ray → y=0
@@ -138,17 +141,30 @@ const initXr = (global: Global) => {
         };
     };
 
-    // Touch handler
+    // Touch handler — fix reticle in place
     const onTouch = (e: TouchEvent) => {
         if (!arActive) return;
         if ((e.target as HTMLElement).tagName === 'BUTTON') return;
-        if (!reticle?.enabled) return;
+        if (!reticle?.enabled && !arPlaced) return;
 
-        const mat = reticle.render!.meshInstances[0].material as StandardMaterial;
-        mat.diffuse = new Color(0, 1, 0);
-        mat.emissive = new Color(0, 1, 0);
-        mat.update();
-        dbg('[touch] placed');
+        if (!arPlaced) {
+            // First tap: lock reticle at current position
+            arPlaced = true;
+            const mat = reticle!.render!.meshInstances[0].material as StandardMaterial;
+            mat.diffuse = new Color(0, 1, 0);
+            mat.emissive = new Color(0, 1, 0);
+            mat.update();
+            const p = reticle!.getPosition();
+            dbg(`[touch] fixed at ${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}`);
+        } else {
+            // Second tap: unlock, resume tracking
+            arPlaced = false;
+            const mat = reticle!.render!.meshInstances[0].material as StandardMaterial;
+            mat.diffuse = new Color(1, 1, 1);
+            mat.emissive = new Color(0.5, 0.5, 0.5);
+            mat.update();
+            dbg('[touch] unlocked');
+        }
     };
     document.addEventListener('touchstart', onTouch);
 
@@ -171,17 +187,17 @@ const initXr = (global: Global) => {
                 xr8Loaded = true;
             }
 
-            // Use official XR8.PlayCanvas integration — handles two-canvas setup,
-            // camera sync, projection matrix, SLAM frame feeding, etc.
-            window.XR8.PlayCanvas.run(
+            // Use official XR8.PlayCanvas.runXr() integration.
+            // This handles: two-canvas setup (#camerafeed behind #application-canvas),
+            // GlTextureRenderer (camera feed), XrController (SLAM),
+            // camera sync (position/rotation/FOV), ownRunLoop:false (PlayCanvas drives loop).
+            // We only pass our reticle module as extra.
+            window.XR8.PlayCanvas.runXr(
                 { pcCamera: camera, pcApp: app },
-                [
-                    window.XR8.XrController.pipelineModule(),
-                    reticlePipelineModule(),
-                ]
+                [reticlePipelineModule()]
             );
 
-            dbg('[8W] PlayCanvas.run() called');
+            dbg('[8W] PlayCanvas.runXr() called');
             exitBtn.style.display = 'block';
             arBtn.style.display = 'none';
         } catch (err: any) {
@@ -193,7 +209,11 @@ const initXr = (global: Global) => {
 
     const stopAR = () => {
         dbg('[8W] stopping...');
-        try { window.XR8.PlayCanvas.stop(); } catch (e: any) { dbg(`[8W] stop: ${e.message}`); }
+        try {
+            window.XR8.stop();
+        } catch (e: any) {
+            dbg(`[8W] stop: ${e.message}`);
+        }
         exitBtn.style.display = 'none';
         arBtn.style.display = 'block';
         arBtn.textContent = 'START AR';
