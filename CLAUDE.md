@@ -27,17 +27,19 @@
 **Подход:** 8th Wall заменил Variant Launch (решение 2026-03-29).
 Работает в Safari (iOS) и Chrome (Android) без WebXR, без App Clip.
 
-**Как устроено:**
-- 8th Wall получает свой отдельный canvas (320x240, скрытый) — только для SLAM
-- Camera feed отображается через нативный `<video>` элемент (z-index:1)
-- PlayCanvas canvas прозрачный поверх видео (z-index:3)
-- Custom pipeline module (`playcanvas-sync`) синхронизирует 8th Wall pose → PlayCanvas camera
-- FOV извлекается из intrinsics[5] и ставится через `camera.fov` (projectionMatrix readonly в PlayCanvas)
+**Как устроено (v2, 2026-03-30):**
+- Используем **`XR8.PlayCanvas.run()`** — официальная интеграция 8th Wall + PlayCanvas
+- Она сама управляет: два canvas, camera sync, projection matrix, SLAM feed
+- Наш custom module (`reticle-placement`) только: reticle на ground plane + gsplat hide/show
+- Reticle: ray-ground intersection (cam → y=0 plane, показывается когда камера смотрит вниз)
+- Tap → reticle зелёный (тест surface detection)
+- iPad detection: `maxTouchPoints > 1` (iPad UA не содержит "iPad")
 
-**Почему так:**
-- Нельзя запускать XR8.run() на PlayCanvas canvas — конфликт WebGL контекстов, SLAM не стартует
-- Нельзя использовать GlTextureRenderer — создаёт второй WebGL контекст, iOS убивает → замороженный кадр
-- Нельзя писать в camera.camera.projectionMatrix — readonly в PlayCanvas, TypeError на каждом кадре
+**Что НЕ работает (проверено):**
+- `XR8.run()` напрямую на PlayCanvas canvas — конфликт WebGL, SLAM не стартует
+- `XR8.run()` на отдельном canvas + ручной sync — SLAM работает но reticle не отображается
+- `GlTextureRenderer` — второй WebGL контекст, iOS убивает → frozen frame
+- `camera.camera.projectionMatrix = ...` — readonly, TypeError каждый кадр
 
 ## Ключевые файлы
 - `src/xr.ts` — AR логика (8th Wall pipeline, reticle, placement, debug overlay)
