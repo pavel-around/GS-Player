@@ -6,56 +6,77 @@
 
 ## Стек
 - **PlayCanvas Engine** v2.17.1 (MIT) — 3D/GSplat рендер
-- **8th Wall Engine** (open source MIT + SLAM binary) — AR через камеру в браузере
+- **8th Wall Engine** (self-hosted binary + SLAM) — AR через камеру в браузере
 - **Rollup** + **TypeScript** — сборка
 - **Cloudflare Workers** — деплой (auto-deploy из `main` через wrangler)
 
 ## Деплой
 - **URL:** https://gs.aroundstudio.io
-- **Хостинг:** Cloudflare Workers (static assets) — перенесён с Netlify 2026-03-30
-- **Netlify:** отключен (лимит bandwidth исчерпан на free plan)
+- **Хостинг:** Cloudflare Workers (static assets)
 - **Конфиг:** `wrangler.toml` в корне репо (`[assets] directory = "./public"`)
-- **Build command:** `npx rollup -c`
-- **Deploy command:** `npx wrangler deploy`
+- **Build:** `npx rollup -c` (выход → `public/`, НЕ в `dist/`)
+- **Deploy:** `npx wrangler deploy` (требует Node 20+, через nvm)
 - **Workers URL:** `gs-player.soft-star-ea0c.workers.dev`
 - **Custom domain:** `gs.aroundstudio.io` (CNAME в Cloudflare DNS)
 - **Repo:** https://github.com/pavel-around/GS-Player
 - **Upstream:** https://github.com/playcanvas/supersplat-viewer
 
+### ВАЖНО: сборка
+- Rollup выдаёт web app в `public/` и module в `dist/` — это РАЗНЫЕ бандлы
+- `dist/index.js` — library module (вход: `src/module/index.ts`), НЕ для деплоя
+- `public/index.js` — web app (вход: `src/index.ts`), деплоится на Cloudflare
+- **НИКОГДА не копировать `dist/*.js` в `public/`** — это сломает сайт
+
 ## AR архитектура (2026-03-30)
 
-**Подход:** 8th Wall заменил Variant Launch (решение 2026-03-29).
+**Подход:** `XR8.PlayCanvas.runXr()` — официальная интеграция 8th Wall + PlayCanvas.
 Работает в Safari (iOS) и Chrome (Android) без WebXR, без App Clip.
 
-**Как устроено (v2, 2026-03-30):**
-- Используем **`XR8.PlayCanvas.run()`** — официальная интеграция 8th Wall + PlayCanvas
-- Она сама управляет: два canvas, camera sync, projection matrix, SLAM feed
-- Наш custom module (`reticle-placement`) только: reticle на ground plane + gsplat hide/show
-- Reticle: ray-ground intersection (cam → y=0 plane, показывается когда камера смотрит вниз)
-- Tap → reticle зелёный (тест surface detection)
-- iPad detection: `maxTouchPoints > 1` (iPad UA не содержит "iPad")
+**Как устроено:**
+- `XR8.PlayCanvas.runXr()` управляет всем: два canvas, GlTextureRenderer, XrController (SLAM), camera sync (position/rotation/FOV)
+- Two-canvas mode: `#camerafeed` (camera feed, GlTextureRenderer, SLAM readPixels) за `#application-canvas` (PlayCanvas, z-index:15, transparent)
+- `ownRunLoop: false` — PlayCanvas drives loop, internal module hooks `pcApp.on('update')` → `XR8.runPreRender()`
+- Наш custom module (`reticle-placement`) только: reticle raycast (cam → y=0) + gsplat hide/show
+- `window.pc = pc` — **обязательно**, 8th Wall binary ссылается на `pc.Color`, `pc.Entity`, `pc.Mesh` и т.д. как на глобал
+- Tap → фиксирует reticle в пространстве (зелёный), повторный tap → разблокирует
+
+**Критичные находки (не забывать):**
+1. Self-hosted 8th Wall binary имеет `runXr()` но НЕ `run()` (добавлен в R22.4, нашей версии нет)
+2. `window.pc` должен быть выставлен ДО вызова `runXr()` — иначе `pc.Color(0,0,0,0)` для прозрачности canvas падает → чёрный экран без camera feed
+3. XrController добавляется автоматически в `runXr()`, не нужно передавать в extraModules
+4. `stopXr()` может не быть экспортирован — используем `XR8.stop()` для остановки
 
 **Что НЕ работает (проверено):**
+- `XR8.PlayCanvas.run()` — не существует в self-hosted binary (только `runXr`)
 - `XR8.run()` напрямую на PlayCanvas canvas — конфликт WebGL, SLAM не стартует
-- `XR8.run()` на отдельном canvas + ручной sync — SLAM работает но reticle не отображается
-- `GlTextureRenderer` — второй WebGL контекст, iOS убивает → frozen frame
-- `camera.camera.projectionMatrix = ...` — readonly, TypeError каждый кадр
+- `GlTextureRenderer` на том же canvas что PlayCanvas — второй WebGL контекст, iOS убивает
+- `camera.camera.projectionMatrix = ...` — readonly в PlayCanvas, TypeError
 
 ## Ключевые файлы
-- `src/xr.ts` — AR логика (8th Wall pipeline, reticle, placement, debug overlay)
+- `src/xr.ts` — AR логика (8th Wall PlayCanvas integration, reticle, tap-to-fix, debug overlay)
 - `src/index.ts` — точка входа, загрузка gsplat
-- `src/viewer.ts` — основной viewer (camera, update loop, post-effects)
+- `src/viewer.ts` — основной viewer (camera, update loop, `autoRender=false`)
 - `src/ui.ts` — UI (кнопки, настройки, tooltip, joystick)
+- `src/index.html` — HTML, canvas `id="application-canvas"` (важно для 8th Wall CSS)
 - `public/8thwall/` — 8th Wall скрипты (xr.js, xr-slam.js, xrextras.js)
 - `public/settings.json` — настройки viewer
 - `wrangler.toml` — конфиг Cloudflare Workers deploy
+- `/tmp/8thwall-repo/reality/app/xr/js/src/xr-playcanvas.js` — исходник 8th Wall PlayCanvas module (для справки)
 
 ## Сборка и запуск
 ```bash
 npm install
 npm run develop     # dev server (watch + serve)
-npx rollup -c       # production build → public/
+npx rollup -c       # production build → public/ (и dist/, но dist не деплоить)
 npx serve public    # serve на localhost:3000
+```
+
+## Деплой
+```bash
+# Требуется Node 20+ (через nvm)
+export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm use 20
+npx rollup -c
+npx wrangler deploy
 ```
 
 ## Тестирование AR
@@ -70,37 +91,41 @@ adb reverse tcp:3000 tcp:3000
 
 ## Статус AR (2026-03-30)
 - [x] 8th Wall скрипты загружаются on demand
-- [x] Отдельный SLAM canvas (не конфликтует с PlayCanvas WebGL)
-- [x] Camera feed через нативный `<video>` (не GlTextureRenderer)
-- [x] Pipeline module: pose sync, FOV из intrinsics
-- [x] SLAM работает на iOS (onUpdate получает reality data)
+- [x] `XR8.PlayCanvas.runXr()` — official two-canvas integration
+- [x] Camera passthrough (GlTextureRenderer на #camerafeed canvas)
+- [x] SLAM camera sync (position, rotation, FOV из intrinsics)
+- [x] `window.pc` exposed для 8th Wall internal module
+- [x] Reticle видимый (ray → y=0 ground plane)
+- [x] Tap → фиксирует reticle в пространстве (зелёный)
+- [x] Повторный tap → разблокирует reticle (белый)
 - [x] Debug overlay (зеленый текст, 30 строк)
 - [x] EXIT AR кнопка
 - [x] Cloudflare Workers deploy
-- [ ] Reticle видимый на iOS (тестируется)
-- [ ] Tap → reticle красный (тест surface detection)
-- [ ] Gsplat placement по тапу
-- [ ] Variant Launch убран полностью из документации
+- [ ] Gsplat placement по тапу (показать gsplat в зафиксированной позиции)
+- [ ] Масштаб/поворот gsplat в AR
 
 ## Решённые проблемы (хронология)
 1. XrNavigation.tryTeleport() перехватывал тапы → убраны XR input listeners в AR
 2. settings.json 404 → создан с правильной схемой
 3. Gsplat не рендерился в AR → camera parent сброшен в origin
-4. **xrextras.js был gzip-файл** → браузер не мог исполнить. Распакован (31KB → 131KB)
+4. **xrextras.js был gzip-файл** → распакован (31KB → 131KB)
 5. **Pipeline modules после XR8.run()** → onStart не вызывался. Переставлено: modules → run()
-6. **iOS frozen camera** → GlTextureRenderer создавал второй WebGL контекст, iOS его убивал. Убран, камера через `<video>`
-7. **XR8.run() на PlayCanvas canvas** → конфликт WebGL, SLAM не стартовал. Дан отдельный canvas 320x240
-8. **camera.camera.projectionMatrix = readonly** → TypeError на каждом кадре убивал onUpdate до reticle. Заменено на извлечение FOV из intrinsics[5]
+6. **iOS frozen camera** → GlTextureRenderer создавал второй WebGL на PlayCanvas canvas. Дан отдельный canvas
+7. **XR8.run() на PlayCanvas canvas** → конфликт WebGL, SLAM не стартовал. Решено через two-canvas
+8. **camera.camera.projectionMatrix = readonly** → TypeError. Решено: FOV из intrinsics[5]
+9. **XR8.PlayCanvas.run() не существует** в self-hosted binary → заменено на `runXr()`
+10. **`pc` не определён как глобал** → 8th Wall module не мог создать `pc.Color(0,0,0,0)` для прозрачности canvas → чёрный фон. Решено: `window.pc = pc`
+11. **`dist/index.js` скопирован в `public/`** → белый экран (module build вместо web app). Rollup пишет напрямую в `public/`, копировать не нужно
 
 ## Фазы разработки
 
-### Фаза 1 — AR прототип (в работе)
+### Фаза 1 — AR прототип (почти готово)
 - [x] Форк SuperSplat Viewer
 - [x] Загрузка .ply, orbit камера, базовый UI
 - [x] WebXR AR на Android (до перехода на 8th Wall)
 - [x] 8th Wall интеграция (SLAM, camera, pose sync)
 - [x] Миграция на Cloudflare Workers
-- [ ] Reticle + tap placement на iOS
+- [x] Camera passthrough + reticle + tap-to-fix
 - [ ] Gsplat placement по тапу (позиционирование, масштаб)
 
 ### Фаза 2 — 4DGS секвенция
