@@ -4,9 +4,26 @@
 Кроссплатформенный браузерный просмотрщик 4D Gaussian Splatting с AR-режимом.
 Форк supersplat-viewer (PlayCanvas, MIT).
 
+## Лицензирование
+
+| Компонент | Лицензия | Файлы |
+|---|---|---|
+| SuperSplat Viewer (наш код) | MIT (PlayCanvas Ltd.) | `src/`, `LICENSE` |
+| PlayCanvas Engine | MIT | `node_modules/playcanvas/` |
+| 8th Wall XR Engine | **Niantic Spatial proprietary** (XR Engine License) | `public/8thwall/` |
+
+**8th Wall XR Engine License (ключевые ограничения):**
+- Non-exclusive, non-transferable, non-sublicensable, **revocable**
+- Распространять можно только в оригинальной форме, только в составе своих приложений
+- **Нельзя:** продавать продукт, ценность которого целиком/существенно основана на функциональности 8th Wall
+- **Нельзя:** reverse engineer, modify, create derivative works, sublicense
+- Обязательна атрибуция Niantic Spatial
+- Niantic может отозвать лицензию в любой момент с уведомлением за 5 дней
+- Copyright © 2026 Niantic Spatial, Inc.
+
 ## Стек
 - **PlayCanvas Engine** v2.17.1 (MIT) — 3D/GSplat рендер
-- **8th Wall Engine** (self-hosted binary + SLAM) — AR через камеру в браузере
+- **8th Wall XR Engine** (Niantic Spatial, proprietary, self-hosted binary) — AR через камеру в браузере
 - **Rollup** + **TypeScript** — сборка
 - **Cloudflare Workers** — деплой (auto-deploy из `main` через wrangler)
 

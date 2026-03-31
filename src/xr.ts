@@ -60,7 +60,7 @@ const initXr = (global: Global) => {
     state.hasVR = false;
     dbg(`[XR] isMobile=${isMobile}`);
 
-    let arActive = false;
+    let arActive = false;  // local flag for touch handler etc.
     let arPlaced = false;
     let gsplatEntity: Entity | null = null;
     let reticle: Entity | null = null;
@@ -79,6 +79,8 @@ const initXr = (global: Global) => {
         entity.setLocalScale(0.15, 0.15, 0.15);
         entity.enabled = false;
         app.root.addChild(entity);
+        // disable frustum culling so the plane is never partially clipped by the view frustum
+        entity.render!.meshInstances.forEach(mi => { mi.cull = false; });
         return entity;
     };
 
@@ -92,6 +94,7 @@ const initXr = (global: Global) => {
             onStart: () => {
                 dbg('[reticle] onStart');
                 arActive = true;
+                state.arActive = true;
                 arPlaced = false;
 
                 gsplatEntity = app.root.findByName('gsplat') as Entity | null;
@@ -102,6 +105,11 @@ const initXr = (global: Global) => {
             },
             onUpdate: () => {
                 updateCount++;
+
+                // Force wide clip planes every frame — must be set here (inside 8th Wall pipeline)
+                // because both 8th Wall camera sync and viewer.ts applyCamera() can override them
+                camera.camera.nearClip = 0.01;
+                camera.camera.farClip = 1000;
 
                 if (updateCount <= 5 || updateCount % 120 === 0) {
                     const p = camera.getPosition();
@@ -128,6 +136,7 @@ const initXr = (global: Global) => {
             onDetach: () => {
                 dbg('[reticle] onDetach');
                 arActive = false;
+                state.arActive = false;
                 arPlaced = false;
 
                 if (gsplatEntity) {

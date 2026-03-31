@@ -42,6 +42,7 @@ type State = {
     animationPaused: boolean;
     hasAR: boolean;
     hasVR: boolean;
+    arActive: boolean;
     hasCollision: boolean;
     hasVoxelOverlay: boolean;
     voxelOverlayEnabled: boolean;

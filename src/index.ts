@@ -209,6 +209,7 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         animationPaused: true,
         hasAR: false,
         hasVR: false,
+        arActive: false,
         hasCollision: false,
         hasVoxelOverlay: false,
         voxelOverlayEnabled: false,

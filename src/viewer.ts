@@ -266,6 +266,14 @@ class Viewer {
                 return;
             }
 
+            // in 8th Wall AR mode: don't touch camera position/rotation/FOV (managed by 8th Wall SLAM),
+            // but set wide clip planes so the reticle and gsplat stay visible at any distance
+            if (state.arActive) {
+                global.camera.camera.nearClip = 0.01;
+                global.camera.camera.farClip = 1000;
+                return;
+            }
+
             if (this.inputController && this.cameraManager) {
                 // update inputs
                 this.inputController.update(deltaTime, this.cameraManager.camera.distance);
