@@ -2,7 +2,9 @@ import * as pc from 'playcanvas';
 import {
     Color,
     Entity,
+    GSplatComponent,
     StandardMaterial,
+    Vec3,
 } from 'playcanvas';
 
 import { Global } from './types';
@@ -98,7 +100,14 @@ const initXr = (global: Global) => {
                 arPlaced = false;
 
                 gsplatEntity = app.root.findByName('gsplat') as Entity | null;
-                if (gsplatEntity) gsplatEntity.enabled = false;
+                if (gsplatEntity) {
+                    gsplatEntity.enabled = false;
+                    // Disable frustum culling on gsplat so it doesn't clip in AR
+                    if (gsplatEntity.gsplat?.instance) {
+                        const mi = gsplatEntity.gsplat.instance.meshInstance;
+                        if (mi) mi.cull = false;
+                    }
+                }
 
                 if (!reticle) reticle = buildReticle();
                 reticle.enabled = false;
@@ -143,36 +152,63 @@ const initXr = (global: Global) => {
                     gsplatEntity.enabled = true;
                     gsplatEntity.setLocalScale(1, 1, 1);
                     gsplatEntity.setPosition(0, 0, 0);
-                    gsplatEntity.setLocalEulerAngles(0, 0, 180);
+                    gsplatEntity.setLocalEulerAngles(0, 0, 0);
                 }
                 if (reticle) reticle.enabled = false;
             }
         };
     };
 
-    // Touch handler — fix reticle in place
+    // Place gsplat at reticle position, scaled to fit AR
+    const placeGsplat = () => {
+        if (!gsplatEntity || !reticle) return;
+
+        const reticlePos = reticle.getPosition();
+
+        // Calculate scale: fit gsplat into ~0.3m based on its bounding box
+        const gsplat = gsplatEntity.gsplat as GSplatComponent;
+        const bbox = gsplat?.customAabb;
+        let arScale = 0.01; // fallback
+        if (bbox) {
+            const maxExtent = Math.max(bbox.halfExtents.x, bbox.halfExtents.y, bbox.halfExtents.z) * 2;
+            if (maxExtent > 0) {
+                arScale = 0.3 / maxExtent;
+            }
+        }
+
+        // Position gsplat at reticle, centered on bounding box
+        gsplatEntity.setLocalScale(arScale, arScale, arScale);
+        if (bbox) {
+            // Offset so the bottom of the bounding box sits on the ground plane
+            const offsetY = bbox.halfExtents.y * arScale;
+            gsplatEntity.setPosition(reticlePos.x, reticlePos.y + offsetY, reticlePos.z);
+        } else {
+            gsplatEntity.setPosition(reticlePos.x, reticlePos.y, reticlePos.z);
+        }
+        gsplatEntity.setLocalEulerAngles(0, 0, 0);
+
+        gsplatEntity.enabled = true;
+        reticle.enabled = false;
+
+        dbg(`[place] gsplat at ${reticlePos.x.toFixed(2)},${reticlePos.y.toFixed(2)},${reticlePos.z.toFixed(2)} scale=${arScale.toFixed(4)}`);
+    };
+
+    // Touch handler — tap to place gsplat, tap again to reset
     const onTouch = (e: TouchEvent) => {
         if (!arActive) return;
         if ((e.target as HTMLElement).tagName === 'BUTTON') return;
         if (!reticle?.enabled && !arPlaced) return;
 
         if (!arPlaced) {
-            // First tap: lock reticle at current position
+            // First tap: place gsplat at reticle position
             arPlaced = true;
-            const mat = reticle!.render!.meshInstances[0].material as StandardMaterial;
-            mat.diffuse = new Color(0, 1, 0);
-            mat.emissive = new Color(0, 1, 0);
-            mat.update();
-            const p = reticle!.getPosition();
-            dbg(`[touch] fixed at ${p.x.toFixed(2)},${p.y.toFixed(2)},${p.z.toFixed(2)}`);
+            placeGsplat();
         } else {
-            // Second tap: unlock, resume tracking
+            // Second tap: hide gsplat, resume reticle tracking
             arPlaced = false;
-            const mat = reticle!.render!.meshInstances[0].material as StandardMaterial;
-            mat.diffuse = new Color(1, 1, 1);
-            mat.emissive = new Color(0.5, 0.5, 0.5);
-            mat.update();
-            dbg('[touch] unlocked');
+            if (gsplatEntity) gsplatEntity.enabled = false;
+            if (reticle) reticle.enabled = true;
+            dbg('[touch] reset — reticle tracking');
         }
     };
     document.addEventListener('touchstart', onTouch);
@@ -223,10 +259,36 @@ const initXr = (global: Global) => {
         } catch (e: any) {
             dbg(`[8W] stop: ${e.message}`);
         }
+
+        // Restore gsplat state (onDetach may not fire reliably on XR8.stop)
+        arActive = false;
+        state.arActive = false;
+        arPlaced = false;
+
+        if (gsplatEntity) {
+            gsplatEntity.enabled = true;
+            gsplatEntity.setLocalScale(1, 1, 1);
+            gsplatEntity.setPosition(0, 0, 0);
+            gsplatEntity.setLocalEulerAngles(0, 0, 0);
+        }
+        if (reticle) reticle.enabled = false;
+
+        // Remove 8th Wall's camera feed canvas if it exists
+        const camerafeed = document.getElementById('camerafeed');
+        if (camerafeed) camerafeed.remove();
+
+        // Restore application canvas background (8th Wall makes it transparent)
+        const appCanvas = document.getElementById('application-canvas') as HTMLCanvasElement;
+        if (appCanvas) {
+            appCanvas.style.background = '';
+        }
+
         exitBtn.style.display = 'none';
         arBtn.style.display = 'block';
         arBtn.textContent = 'START AR';
         arBtn.style.pointerEvents = 'auto';
+
+        app.renderNextFrame = true;
     };
 
     // UI

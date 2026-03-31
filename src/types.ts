@@ -26,6 +26,11 @@ type Config = {
     webgpu: boolean;                            // use WebGPU device
     gpusort: boolean;                           // use GPU sorting for splats
     heatmap: boolean;                           // render heatmap debug overlay (WebGPU only)
+
+    // 4DGS sequence
+    sequenceBaseUrl?: string;                   // base URL for PLY frame sequence
+    sequenceFrameCount: number;                 // number of frames (default 121)
+    sequenceFps: number;                        // playback framerate (default 24)
 };
 
 // observable state that can change at runtime
@@ -49,6 +54,12 @@ type State = {
     isFullscreen: boolean;
     controlsHidden: boolean;
     gamingControls: boolean;
+
+    // 4DGS sequence
+    hasSequence: boolean;
+    sequenceFrame: number;
+    sequenceFrameCount: number;
+    sequenceLoaded: boolean;
 };
 
 type Global = {

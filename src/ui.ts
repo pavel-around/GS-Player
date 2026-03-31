@@ -479,25 +479,33 @@ const initUI = (global: Global) => {
     events.on('hasAnimation:changed', (value, prev) => {
         // Start and Stop animation
         dom.play.addEventListener('click', () => {
-            state.cameraMode = 'anim';
+            if (!state.hasSequence) {
+                state.cameraMode = 'anim';
+            }
             state.animationPaused = false;
         });
 
         dom.pause.addEventListener('click', () => {
-            state.cameraMode = 'anim';
+            if (!state.hasSequence) {
+                state.cameraMode = 'anim';
+            }
             state.animationPaused = true;
         });
 
         const updatePlayPause = () => {
-            if (state.cameraMode !== 'anim' || state.animationPaused) {
-                dom.play.classList.remove('hidden');
-                dom.pause.classList.add('hidden');
-            } else {
+            const isPlaying = state.hasSequence
+                ? !state.animationPaused
+                : (state.cameraMode === 'anim' && !state.animationPaused);
+
+            if (isPlaying) {
                 dom.play.classList.add('hidden');
                 dom.pause.classList.remove('hidden');
+            } else {
+                dom.play.classList.remove('hidden');
+                dom.pause.classList.add('hidden');
             }
 
-            if (state.cameraMode === 'anim') {
+            if (state.hasSequence || state.cameraMode === 'anim') {
                 dom.timelineContainer.classList.remove('hidden');
             } else {
                 dom.timelineContainer.classList.add('hidden');
@@ -509,9 +517,14 @@ const initUI = (global: Global) => {
         events.on('animationPaused:changed', updatePlayPause);
 
         const updateSlider = () => {
-            dom.handle.style.left = `${state.animationTime / state.animationDuration * 100}%`;
-            dom.time.style.left = `${state.animationTime / state.animationDuration * 100}%`;
-            dom.time.innerText = `${state.animationTime.toFixed(1)}s`;
+            const pct = state.animationDuration > 0 ? state.animationTime / state.animationDuration * 100 : 0;
+            dom.handle.style.left = `${pct}%`;
+            dom.time.style.left = `${pct}%`;
+            if (state.hasSequence) {
+                dom.time.innerText = `${state.sequenceFrame} / ${state.sequenceFrameCount}`;
+            } else {
+                dom.time.innerText = `${state.animationTime.toFixed(1)}s`;
+            }
         };
 
         events.on('animationTime:changed', updateSlider);

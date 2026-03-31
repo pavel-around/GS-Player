@@ -22,6 +22,14 @@
             const settingsUrl = url.searchParams.has('settings') ? url.searchParams.get('settings') : './settings.json';
             const contentUrl = url.searchParams.has('content') ? url.searchParams.get('content') : './scene.compressed.ply';
 
+            // 4DGS sequence params
+            const sequenceName = url.searchParams.get('sequence');
+            const sequenceBaseUrl = sequenceName
+                ? `https://pub-3691c4c7a3414a33946a5d5b4e739bf0.r2.dev/${sequenceName}/`
+                : undefined;
+            const sequenceFrameCount = parseInt(url.searchParams.get('frames') || '121');
+            const sequenceFps = parseInt(url.searchParams.get('fps') || '24');
+
             const sseConfig = {
                 poster: posterUrl && createImage(posterUrl),
                 skyboxUrl,
@@ -40,6 +48,9 @@
                 aa: url.searchParams.has('aa'),
                 heatmap: url.searchParams.has('heatmap'),
                 fullload: url.searchParams.has('fullload'),
+                sequenceBaseUrl,
+                sequenceFrameCount,
+                sequenceFps,
             };
 
             window.sse = {

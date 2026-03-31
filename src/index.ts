@@ -22,6 +22,7 @@ import { initPoster, initUI } from './ui';
 import { Viewer } from './viewer';
 import { VoxelCollider } from './voxel-collider';
 import { initXr } from './xr';
+import { SequencePlayer } from './sequence';
 import { version as appVersion } from '../package.json';
 
 const loadGsplat = async (app: AppBase, config: Config, progressCallback: (progress: number) => void) => {
@@ -34,7 +35,7 @@ const loadGsplat = async (app: AppBase, config: Config, progressCallback: (progr
     return new Promise<Entity>((resolve, reject) => {
         asset.on('load', () => {
             const entity = new Entity('gsplat');
-            entity.setLocalEulerAngles(0, 0, 180);
+            entity.setLocalEulerAngles(0, 0, 0);
             entity.addComponent('gsplat', {
                 unified: unified || filename.toLowerCase().endsWith('lod-meta.json'),
                 asset
@@ -215,7 +216,11 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
         voxelOverlayEnabled: false,
         isFullscreen: false,
         controlsHidden: false,
-        gamingControls: localStorage.getItem('gamingControls') === 'true'
+        gamingControls: localStorage.getItem('gamingControls') === 'true',
+        hasSequence: !!config.sequenceBaseUrl,
+        sequenceFrame: 0,
+        sequenceFrameCount: config.sequenceFrameCount || 121,
+        sequenceLoaded: false
     });
 
     const global: Global = {
@@ -247,14 +252,11 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     // Initialize user interface
     initUI(global);
 
-    // Load model
-    const gsplatLoad = loadGsplat(
-        app,
-        config,
-        (progress: number) => {
-            state.progress = progress;
-        }
-    );
+    // Load model (single PLY or first frame of 4DGS sequence)
+    const isSequence = !!config.sequenceBaseUrl;
+    const gsplatLoad = isSequence
+        ? SequencePlayer.loadFirstFrame(app, config, (progress: number) => { state.progress = progress; })
+        : loadGsplat(app, config, (progress: number) => { state.progress = progress; });
 
     // Load skybox
     const skyboxLoad = config.skyboxUrl &&
@@ -284,7 +286,17 @@ const main = async (canvas: HTMLCanvasElement, settingsJson: any, config: Config
     }
 
     // Create the viewer
-    return new Viewer(global, gsplatLoad, skyboxLoad, voxelLoad);
+    const viewer = new Viewer(global, gsplatLoad, skyboxLoad, voxelLoad);
+
+    // Start 4DGS sequence background loading after first frame is ready
+    if (isSequence) {
+        gsplatLoad.then((entity) => {
+            const player = new SequencePlayer(app, entity, config, state, events);
+            player.loadRemaining();
+        });
+    }
+
+    return viewer;
 };
 
 console.log(`SuperSplat Viewer v${appVersion} | Engine v${engineVersion} (${engineRevision})`);
